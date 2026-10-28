@@ -1,0 +1,22 @@
+{
+  "building": "Myhal",
+  "car": "burton",
+  "board_orientation": "burton",
+  "operator_notes": "burton",
+  "port": "COM6",
+  "baud": "1000000",
+  "floors": [
+    "B",
+    "1",
+    "2",
+    "3",
+    "4",
+    "5",
+    "6",
+    "7"
+  ],
+  "firmware_header": [],
+  "stopped": true,
+  "stop_time": "2026-10-28T14:18:30",
+  "start_time": "2026-10-28T14:16:29"
+}

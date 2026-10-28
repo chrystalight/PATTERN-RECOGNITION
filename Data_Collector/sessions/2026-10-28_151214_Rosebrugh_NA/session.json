@@ -1,0 +1,21 @@
+{
+  "building": "Rosebrugh",
+  "car": "",
+  "board_orientation": "facingforward",
+  "operator_notes": "trial4",
+  "port": "COM6",
+  "baud": "1000000",
+  "floors": [
+    "B",
+    "G",
+    "1",
+    "2",
+    "3",
+    "4",
+    "5"
+  ],
+  "firmware_header": [],
+  "stopped": true,
+  "stop_time": "2026-10-28T15:15:13",
+  "start_time": "2026-10-28T15:12:14"
+}
