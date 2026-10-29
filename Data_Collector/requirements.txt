@@ -1,1 +1,5 @@
 pyserial
+numpy
+pandas
+scipy
+matplotlib
