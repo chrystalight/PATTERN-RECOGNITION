@@ -1,0 +1,21 @@
+{
+  "building": "Mechanical (MC)",
+  "car": "",
+  "board_orientation": "",
+  "operator_notes": "",
+  "port": "COM6",
+  "baud": "1000000",
+  "floors": [
+    "B",
+    "G",
+    "1",
+    "2",
+    "3",
+    "4",
+    "5"
+  ],
+  "firmware_header": [],
+  "stopped": true,
+  "stop_time": "2026-10-29T16:59:46",
+  "start_time": "2026-10-29T16:53:46"
+}

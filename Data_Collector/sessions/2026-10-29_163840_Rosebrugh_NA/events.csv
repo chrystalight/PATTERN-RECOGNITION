@@ -1,0 +1,3 @@
+host_epoch,iso_time,t_us_at_event,event_type,value,note
+1793306321.039386,2026-10-29T16:38:41.039,,session_start,Rosebrugh,car=NA
+1793306321.931957,2026-10-29T16:38:41.931,859688043,session_end,,
