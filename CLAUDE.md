@@ -39,17 +39,24 @@ sensor data.
   the barometer to ~5%). Jerk = least-squares slope of the 20–80% launch/brake ramps. Lateral sway
   is divided by the sway in the dwell just before the ride. 200 Hz sampling aliases 120 Hz flicker
   to 80 Hz and mains harmonics to 60/80/20/40 Hz.
-- **25 features**, phase-based (launch = start of ride, brake = end, regardless of direction):
+- **22 features**, phase-based (launch = start of ride, brake = end, regardless of direction):
   cruise speed; launch/brake accel, ratio, rise/release time, ramp jerk, plateau; peak jerk; launch
   phase; accel-distance fraction; duration; post-stop wobble peak/RMS + bounce frequency; sway/rest;
-  light mean/std/flicker index; EMF mean/AC RMS/mains fraction; temp. Extra columns: `direction`
+  light mean/std/flicker index; temp. Extra columns: `direction`
   (classifier input), `height_m` (for the floor-lattice feature), `floor_height_m` (analysis only).
 - Dropped after the cross-day check: vertical vibration (RMS, centroid, band power — unstable even
-  normalized), speed ripple, RH, EMF strongest harmonic, door pop/step, EMF-accel correlation,
+  normalized), speed ripple, RH, **all EMF** (no change between dwell and ride even at launch; its
+  mean is a per-day ADC offset between two integer levels), door pop/step, EMF-accel correlation,
   flicker frequency, temp/RH-vs-altitude slopes. Levelling creep was tested and is below the
   barometer's noise, so it isn't a feature.
 - Keep it to ONE script, ONE consolidated output (`ride_features.csv`). `ride_features.png` puts
-  one column per building, with cars in the same building shown as shades of that building's hue.
+  one column per building, with cars in the same building shown as shades of that building's hue;
+  `ride_features_top15.png` shows only `TOP_FEATURES` (the 15 carried to the classifiers, ranked).
+- Classifier rules: leave-one-session-out CV; anything learned from data (floor-lattice clusters,
+  scaling, PCA, feature selection) is refitted inside each fold. The rise/jerk/release/launch-phase
+  features are one correlated "drive smoothness" factor (r 0.88–0.98), so trim them or reduce them
+  with PCA for naive Bayes / KNN. The user is holding back one extra session per building as a
+  final test set: freeze the model before it is shared, run it once, never tune on it.
 
 ## Current state (2026-10-29)
 - Collected: **Myhal** (cars right + left, 10-28, 26 rides), **Rosebrugh** (1 car; 10-28 4

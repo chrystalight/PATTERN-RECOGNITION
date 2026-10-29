@@ -30,12 +30,12 @@ Filtering (the raw 200 Hz accelerometer is too noisy to differentiate directly):
     plus the max derivative of a_lp for reference.
   * lateral sway = 0.5-20 Hz band-pass of the two horizontal axes, divided by the same quantity in
     the dwell just before the ride (board placement changed raw vibration ~2x between days).
-  * spectra (light flicker, EMF harmonics) are Welch PSDs (1.28 s Hann segments, 50% overlap).
+  * light flicker spectrum is a Welch PSD (1.28 s Hann segments, 50% overlap).
 Dropped after the cross-day check: vertical vibration (unstable even normalized), speed ripple, RH
-(weather), EMF strongest harmonic, and the features that depended on hand-logged doors or showed
+(weather), all EMF features (the sensor shows no change between dwell and ride, even at
+launch; its mean is a per-day ADC offset sitting between two integer levels), and the features that depended on hand-logged doors or showed
 nothing (EMF-accel correlation, flicker frequency, temp & RH vs altitude).
-Aliasing: at 200 Hz sampling the Nyquist is 100 Hz, so 120 Hz lamp flicker shows at 80 Hz and the
-60 Hz mains harmonics fold to 60 / 80 / 20 / 40 Hz (60, 120, 180, 240+360 Hz).
+Aliasing: at 200 Hz sampling the Nyquist is 100 Hz, so 120 Hz lamp flicker shows at 80 Hz.
 
 Run from the Data_Collector folder:  python postprocess.py
 """
@@ -56,6 +56,7 @@ SESSIONS_DIR = os.path.join(BASE_DIR, "sessions")
 CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
 OUT_CSV = os.path.join(BASE_DIR, "ride_features.csv")
 OUT_PNG = os.path.join(BASE_DIR, "ride_features.png")
+OUT_TOP_PNG = os.path.join(BASE_DIR, "ride_features_top15.png")
 OUT_SEG_PNG = os.path.join(BASE_DIR, "segmentation_check.png")
 
 FAST_HZ = 200.0
@@ -90,7 +91,6 @@ BOUNCE_BAND = (1.0, 8.0)
 BOUNCE_NFFT = 4096       # zero-padded FFT -> ~0.05 Hz bins
 WELCH_NPERSEG = 256      # 1.28 s segments -> 0.78 Hz resolution
 FLICKER_BAND = (50.0, 99.0)    # 120 Hz flicker aliases to 80 Hz
-MAINS_ALIAS_HZ = (60.0, 80.0, 20.0, 40.0)   # 60, 120, 180, 240/360 Hz folded about 100 Hz
 TONE_HALF_BW = 0.8       # Hz either side of a tone when integrating its power
 
 # slow sensors
@@ -216,7 +216,6 @@ def session_signals(F):
     a_v = A @ up - gmag                                   # vertical specific accel, g, + = upward
     h = [A @ e1, A @ e2]                                  # horizontal components (band-passed below)
     light = F["light"].values.astype(float)
-    emf = F["emf"].values.astype(float)
     return {
         "t": (F["t_us"].values - F["t_us"].values[0]) / 1e6,
         "host": F["host"].values,
@@ -227,7 +226,6 @@ def session_signals(F):
         "h1": butter(h[0], SWAY_BAND, "bandpass"),
         "h2": butter(h[1], SWAY_BAND, "bandpass"),
         "light": light,
-        "emf": emf,
     }
 
 
@@ -407,15 +405,6 @@ def ride_features(sig, S, i0, i1):
     f["light_std"] = r(light.std(), 2)
     f["light_flicker_index"] = r(amp / light.mean(), 4) if light.mean() > 0 else np.nan
 
-    # EMF: level, AC RMS, mains-harmonic content
-    emf = sig["emf"][s:e + 1]
-    fr, P = welch(emf)
-    tones = [band_power(fr, P, h - TONE_HALF_BW, h + TONE_HALF_BW) for h in MAINS_ALIAS_HZ]
-    total = band_power(fr, P, 1.0, 99.0)
-    f["emf_mean"] = r(emf.mean(), 2)
-    f["emf_rms_ac"] = r(np.sqrt(np.mean((emf - emf.mean()) ** 2)), 3)
-    f["emf_mains_frac"] = r(sum(tones) / total, 3) if total > 0 else np.nan
-
     # cabin temperature (RH dropped: it follows the weather, not the building)
     ts = (S["t_us"].values - sig["t0_us"]) / 1e6
     m = (ts >= t[s] - SLOW_PAD_S) & (ts <= t[e] + SLOW_PAD_S) & np.isfinite(S["temp"].values)
@@ -478,7 +467,8 @@ def label_ride(F, i0, i1, windows, ev, floors):
 
 # ----------------------------- visualization -----------------------------
 # Every feature as a strip of per-ride dots, one column per building. Cars of the same building
-# share the column and the building's hue, told apart by shade + marker. Black bar = building mean.
+# share the column and the building's hue, told apart by shade + marker (Rosebrugh: up vs down
+# instead, see DIRECTION_SPLIT). Black bar = building mean.
 FEATURES = [
     # kinematics (motion profile)
     ("cruise_speed_mps", "Cruise speed (m/s)"),
@@ -501,14 +491,23 @@ FEATURES = [
     ("bounce_freq_hz", "Post-stop bounce freq (Hz)"),
     # lateral sway (placement-normalized)
     ("sway_rest_ratio", "Lateral sway / rest"),
-    # light, EMF, climate
+    # light, climate
     ("light_mean", "Cabin light (ADC)"),
     ("light_std", "Light std (ADC)"),
     ("light_flicker_index", "Light flicker index"),
-    ("emf_mean", "EMF mean (ADC)"),
-    ("emf_rms_ac", "EMF AC RMS (ADC)"),
-    ("emf_mains_frac", "EMF mains-harmonic fraction"),
     ("temp_mean_c", "Cabin temp (°C)"),
+]
+
+# The 15 features carried forward to the classifiers, best first: ranked on between- vs
+# within-building spread, worst-pair separation, Rosebrugh cross-day shift, and redundancy (left out:
+# light_std ~ flicker index, wobble RMS ~ wobble peak, temp (day risk), bounce freq / brake plateau
+# (weak), duration / accel-distance fraction (trip length, not car)). Ranked on all shared data, so
+# it is a starting point; the reported results re-select features inside each CV fold.
+TOP_FEATURES = [
+    "accel_rise_s", "launch_jerk_g_s", "launch_accel_g", "brake_jerk_g_s", "light_mean",
+    "cruise_speed_mps", "launch_plateau_s", "accel_decel_ratio", "light_flicker_index",
+    "launch_phase_s", "post_stop_wobble_g", "brake_release_s", "brake_accel_g", "peak_jerk_g_s",
+    "sway_rest_ratio",
 ]
 
 # fixed hue per building (never by rank); [dark, light, mid] shades for up to three cars
@@ -521,40 +520,51 @@ BUILDING_COLORS = {
 OTHER_COLORS = ["#6b6a66", "#bdbcb6", "#8f8e89"]
 CAR_MARKERS = ["o", "^", "s"]
 SHORT_NAME = {"Mechanical (MC)": "MC"}
+# Buildings whose rides are split by direction instead of car: Rosebrugh behaves differently up vs
+# down (slower, softer descent; likely hydraulic), while the traction cars are symmetric.
+DIRECTION_SPLIT = {"Rosebrugh"}
+DIR_STYLE = {"up": (0, "^"), "down": (1, "v")}         # (shade index, marker)
 
 
-def car_styles(df, buildings):
-    """(building, car) -> (color, marker, legend label)."""
+def plot_groups(df, buildings):
+    """Adds df['_grp'] (car, or direction for DIRECTION_SPLIT buildings) and returns
+    (building, group) -> (color, marker, legend label)."""
+    df["_grp"] = np.where(df["building"].isin(DIRECTION_SPLIT), df["direction"], df["car"])
     styles = {}
     for b in buildings:
-        cars = sorted(df.loc[df["building"] == b, "car"].fillna("").astype(str).unique())
         shades = BUILDING_COLORS.get(b, OTHER_COLORS)
-        for j, c in enumerate(cars):
-            name = SHORT_NAME.get(b, b)
-            label = f"{name} · {c}" if c and len(cars) > 1 else name
-            styles[(b, c)] = (shades[j % len(shades)], CAR_MARKERS[j % len(CAR_MARKERS)], label)
+        name = SHORT_NAME.get(b, b)
+        groups = sorted(df.loc[df["building"] == b, "_grp"].unique(),
+                        key=lambda g: (DIR_STYLE.get(g, (9,))[0], g))   # up before down
+        for j, g in enumerate(groups):
+            if b in DIRECTION_SPLIT:
+                k, marker = DIR_STYLE.get(g, (2, "o"))
+                styles[(b, g)] = (shades[k % len(shades)], marker, f"{name} · {g}")
+            else:
+                label = f"{name} · {g}" if g and len(groups) > 1 else name
+                styles[(b, g)] = (shades[j % len(shades)], CAR_MARKERS[j % len(CAR_MARKERS)], label)
     return styles
 
 
-def plot_features(df, out_png, config_order):
+def plot_features(df, out_png, config_order, features=FEATURES, title="Per-ride features by building",
+                  ncol=6):
     df = df.copy()
     df["car"] = df["car"].fillna("").astype(str)
     present = list(df["building"].dropna().unique())
     buildings = [b for b in config_order if b in present] + sorted(b for b in present
                                                                    if b not in config_order)
-    styles = car_styles(df, buildings)
+    styles = plot_groups(df, buildings)
     rng = np.random.default_rng(0)
 
-    ncol = 6
-    nrow = int(np.ceil(len(FEATURES) / ncol))
-    fig, axes = plt.subplots(nrow, ncol, figsize=(4.0 * ncol, 3.1 * nrow))
-    for ax, (col, label) in zip(axes.flat, FEATURES):
+    nrow = int(np.ceil(len(features) / ncol))
+    fig, axes = plt.subplots(nrow, ncol, figsize=(4.0 * ncol, 3.1 * nrow), squeeze=False)
+    for ax, (col, label) in zip(axes.flat, features):
         for i, b in enumerate(buildings):
             sub = df[df["building"] == b]
-            for (bb, c), (color, marker, _) in styles.items():
+            for (bb, g), (color, marker, _) in styles.items():
                 if bb != b:
                     continue
-                vals = sub.loc[sub["car"] == c, col].dropna().values
+                vals = sub.loc[sub["_grp"] == g, col].dropna().values
                 ax.scatter(i + rng.uniform(-0.2, 0.2, len(vals)), vals, s=22, alpha=0.85,
                            color=color, marker=marker, edgecolor="white", linewidth=0.5, zorder=2)
             allv = sub[col].dropna().values
@@ -571,7 +581,7 @@ def plot_features(df, out_png, config_order):
             ax.spines[sp].set_visible(False)
         for sp in ("left", "bottom"):
             ax.spines[sp].set_color("#b5b4ae")
-    for ax in axes.flat[len(FEATURES):]:
+    for ax in axes.flat[len(features):]:
         ax.set_visible(False)
 
     handles = [Line2D([], [], ls="", marker=m, color=c, markersize=8, markeredgecolor="white",
@@ -579,9 +589,8 @@ def plot_features(df, out_png, config_order):
     handles.append(Line2D([], [], color="#222222", lw=1.8, label="building mean"))
     fig.legend(handles=handles, loc="upper center", ncol=len(handles), frameon=False, fontsize=10,
                bbox_to_anchor=(0.5, 0.985))
-    fig.suptitle(f"Per-ride features by building  ({len(df)} rides; dots = rides)", fontsize=15,
-                 y=0.998)
-    plt.tight_layout(rect=(0, 0, 1, 0.965))
+    fig.suptitle(f"{title}  ({len(df)} rides; dots = rides)", fontsize=15, y=0.998)
+    plt.tight_layout(rect=(0, 0, 1, 1 - 0.105 / nrow))
     fig.savefig(out_png, dpi=100)
     plt.close(fig)
 
@@ -736,11 +745,16 @@ def main():
 
     csv_msg = save(lambda: df.to_csv(OUT_CSV, index=False), OUT_CSV)
     png_msg = save(lambda: plot_features(df, OUT_PNG, list(building_floors)), OUT_PNG)
+    labels = dict(FEATURES)
+    top = [(c, f"{i}. {labels[c]}") for i, c in enumerate(TOP_FEATURES, start=1)]
+    top_msg = save(lambda: plot_features(df, OUT_TOP_PNG, list(building_floors), top,
+                                         "Top 15 features, ranked", ncol=5), OUT_TOP_PNG)
     seg_msg = save(lambda: plot_segmentation_check(seg_panels, OUT_SEG_PNG), OUT_SEG_PNG)
     print("-" * 92)
     print(f"{len(df)} rides from {df['session'].nunique()} sessions, {len(feat_cols)} features -> {csv_msg}")
     print("Buildings:", ", ".join(f"{b}:{n}" for b, n in df["building"].value_counts().items()))
     print(f"Feature plot        -> {png_msg}")
+    print(f"Top-15 plot         -> {top_msg}")
     print(f"Segmentation check  -> {seg_msg}")
 
 
