@@ -1,10 +1,10 @@
 {
   "building": "Hart House",
-  "car": "NA",
+  "car": "",
   "board_orientation": "",
   "operator_notes": "floor",
   "port": "COM6",
-  "baud": 1000000,
+  "baud": "1000000",
   "floors": [
     "B",
     "G",
@@ -13,7 +13,7 @@
     "3"
   ],
   "firmware_header": [],
-  "stopped": false,
-  "stop_time": null,
+  "stopped": true,
+  "stop_time": "2026-10-29T17:24:33",
   "start_time": "2026-10-29T17:18:02"
 }

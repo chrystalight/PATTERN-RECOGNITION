@@ -1,0 +1,3 @@
+host_epoch,iso_time,t_us_at_event,event_type,value,note
+1793309458.187712,2026-10-29T17:30:58.187,,session_start,Hart House,car=NA
+1793309459.047318,2026-10-29T17:30:59.047,1139263049,session_end,,
