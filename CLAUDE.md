@@ -30,17 +30,26 @@ sensor data.
 ## Pipeline approach
 - Rides are segmented from **smoothed barometric vertical speed** (robust through the
   constant-velocity cruise, where vertical accel looks identical to a dwell). The accelerometer
-  supplies the dynamic features. Hand-logged door events are ground-truth labels, and also time the
-  two door-open features (pressure pop, light step).
+  supplies the dynamic features. Hand-logged door events (where logged) are labels only; **no
+  feature depends on them**, so every feature is available on the board at run time.
 - The baro span is refined to true motion start/stop from the accel launch/brake peaks (10% of
-  peak). Rides cut off by the session start/end are dropped.
-- Filtering: motion profile = 1.5 Hz zero-phase Butterworth low-pass (jerk, peaks, rise time,
-  cruise detection); velocity = integrated raw accel with linear drift removed (distance matches
-  the barometer to ~5%); vibration = 1 Hz high-pass + Welch PSD. 200 Hz sampling aliases 120 Hz
-  flicker to 80 Hz and mains harmonics to 60/80/20/40 Hz.
-- Keep it to ONE script, ONE consolidated output (`ride_features.csv`). Every catalog feature in
-  the working-notes doc is implemented (31 features). `ride_features.png` puts one column per
-  building, with cars in the same building shown as shades of that building's hue.
+  peak). Rides cut off by the session start/end, or with no real launch/brake, are dropped.
+- Vertical axis = the session's resting gravity vector (orientation/tilt-proof). Motion profile =
+  1.5 Hz zero-phase Butterworth low-pass. Velocity = integrated raw accel, drift removed (matches
+  the barometer to ~5%). Jerk = least-squares slope of the 20–80% launch/brake ramps. Lateral sway
+  is divided by the sway in the dwell just before the ride. 200 Hz sampling aliases 120 Hz flicker
+  to 80 Hz and mains harmonics to 60/80/20/40 Hz.
+- **25 features**, phase-based (launch = start of ride, brake = end, regardless of direction):
+  cruise speed; launch/brake accel, ratio, rise/release time, ramp jerk, plateau; peak jerk; launch
+  phase; accel-distance fraction; duration; post-stop wobble peak/RMS + bounce frequency; sway/rest;
+  light mean/std/flicker index; EMF mean/AC RMS/mains fraction; temp. Extra columns: `direction`
+  (classifier input), `height_m` (for the floor-lattice feature), `floor_height_m` (analysis only).
+- Dropped after the cross-day check: vertical vibration (RMS, centroid, band power — unstable even
+  normalized), speed ripple, RH, EMF strongest harmonic, door pop/step, EMF-accel correlation,
+  flicker frequency, temp/RH-vs-altitude slopes. Levelling creep was tested and is below the
+  barometer's noise, so it isn't a feature.
+- Keep it to ONE script, ONE consolidated output (`ride_features.csv`). `ride_features.png` puts
+  one column per building, with cars in the same building shown as shades of that building's hue.
 
 ## Current state (2026-10-29)
 - Collected: **Myhal** (cars right + left, 10-28, 26 rides), **Rosebrugh** (1 car; 10-28 4
@@ -48,24 +57,23 @@ sensor data.
   more than one car; MC, Hart House and Rosebrugh each have a single car (blank `car` field).
   **Burton** was a pure test run (non-target). Its session stays in the repo, but `postprocess.py`
   skips any building not listed in `config.json`, so it is in no output, plot or analysis. Most 10-29 sessions
-  have no door events, so their rides have no floor labels / floor height / door features.
+  have no door events, so their rides have no floor labels or floor height (not needed for classifying).
 - **Hart House** (10-29, 6 sessions, 33 rides; collection complete). Very smooth car: jerk
   ~0.044 g/s (lowest), peak accel ~0.04 g, rise 0.85 s, cruise 0.74 m/s (≈ MC's 0.75). No lamp
   flicker (like MC) but light ~705 vs MC ~900. Uneven floors: one-floor rides ≈ 3.0–3.2, 3.8–3.9
   and 4.2–4.4 m (MC: 2.76 and 3.9 m).
 - Empty <1 s sessions (`2026-10-29_163840_Rosebrugh_NA`, `2026-10-29_173058_Hart_House_NA`) can be
   deleted.
-- Findings (cruise speed = plateau speed): Myhal 0.98, MC 0.75, Hart House 0.74, Rosebrugh 0.66 up / 0.45 down.
-  Rosebrugh's second day is the cross-day check. **Stable across days:** cruise
-  speed (per direction), rise time (Myhal 0.92, MC 0.50, Rosebrugh 0.28 s), jerk, launch/brake
-  ratio, light flicker index (MC lighting has no flicker at all), light mean, temp (within ~1 °C).
-  **Not stable:** vibration RMS / dominant freq / 5-50 Hz power, EMF strongest harmonic, speed
-  ripple, RH (weather). Uninformative: EMF-accel correlation, door pressure pop, flicker frequency,
-  temp/RH-vs-altitude slopes.
+- Findings: most kinematic features form one tight cluster per building (within-building
+  spread 1–5%). Cruise speed Myhal 0.98, MC 0.75, Hart House 0.74, Rosebrugh 0.66 up / 0.45 down.
+  Brake release time: Rosebrugh 0.4, MC 0.55, Myhal 1.6, Hart House 1.7 s. Launch plateau: Rosebrugh
+  0.3, Myhal 0.46, MC 0.92, Hart House 1.0 s. Brake ramp jerk: Hart House 0.023, Myhal 0.029, MC
+  0.076, Rosebrugh 0.14 g/s. Bounce freq: Hart House ~5.5 Hz vs MC/Myhal ~2.2 Hz (noisy). Sway/rest
+  stable across Rosebrugh days (2.40 vs 2.35). Rosebrugh brakes harder after going up (0.078 vs
+  0.051 g), so direction matters there. Light flicker: none in MC or Hart House.
 - Myhal_left rides 3→1 and 4→1 measure as one floor (4.58 m), which is probably a labeling error.
 
 ## Next steps
-- Collect Hart House + MC; re-run `postprocess.py`.
 - Part 2/3: classifiers (KNN, naive Bayes, 1D CNN, tree/RF) vs a threshold baseline, with PCA /
   feature selection; then run on the board.
 

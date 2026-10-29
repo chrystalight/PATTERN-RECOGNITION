@@ -14,19 +14,26 @@ spans / door events).
 Segmentation: the cabin's barometric altitude changes while moving and is flat when stopped, so a
 smoothed pressure-derived vertical speed cleanly marks each ride even through the constant-velocity
 cruise (where vertical acceleration is ~0 and looks just like a dwell). The accelerometer then
-supplies the dynamic features within each ride. The hand-logged door events are used to label
-each ride (building/floors/direction/occupancy), to sanity-check the segmenter, and to time the two
-door-open features (pressure pop, light step).
+supplies the dynamic features within each ride. The hand-logged door events (where logged) only
+label each ride (building/floors/direction/occupancy) and sanity-check the segmenter; no feature
+depends on them, so every feature is available on the board at run time.
 
 Filtering (the raw 200 Hz accelerometer is too noisy to differentiate directly):
-  * motion profile  a_lp  = 4th-order zero-phase Butterworth low-pass at 1.5 Hz. Drives peak
-    accel/decel, rise time, jerk, phase timing and the cruise detector. 1.5 Hz keeps the S-curve
+  * vertical axis = the session's resting gravity vector (any board orientation / tilt works).
+  * motion profile  a_lp  = 4th-order zero-phase Butterworth low-pass at 1.5 Hz. Drives launch /
+    brake accel, rise / release time, plateaus, jerk, phase timing and the cruise detector. 1.5 Hz keeps the S-curve
     (jerk phases last ~0.5-1 s) but removes the ~3 Hz car bounce and sensor noise; it gave the most
     repeatable per-car jerk of the cutoffs tried (1 / 1.5 / 2 / 3 Hz).
   * velocity  v  = integral of the raw vertical accel from motion start to motion end, with the
     linear drift removed so v = 0 at both ends. Its distance matches the barometer to ~5%.
-  * vibration = 1 Hz high-pass of the raw vertical accel over the cruise; spectra are Welch PSDs
-    (1.28 s Hann segments, 50% overlap) instead of a single raw FFT.
+  * jerk = least-squares slope of the 20-80% part of the launch / brake ramps (many samples),
+    plus the max derivative of a_lp for reference.
+  * lateral sway = 0.5-20 Hz band-pass of the two horizontal axes, divided by the same quantity in
+    the dwell just before the ride (board placement changed raw vibration ~2x between days).
+  * spectra (light flicker, EMF harmonics) are Welch PSDs (1.28 s Hann segments, 50% overlap).
+Dropped after the cross-day check: vertical vibration (unstable even normalized), speed ripple, RH
+(weather), EMF strongest harmonic, and the features that depended on hand-logged doors or showed
+nothing (EMF-accel correlation, flicker frequency, temp & RH vs altitude).
 Aliasing: at 200 Hz sampling the Nyquist is 100 Hz, so 120 Hz lamp flicker shows at 80 Hz and the
 60 Hz mains harmonics fold to 60 / 80 / 20 / 40 Hz (60, 120, 180, 240+360 Hz).
 
@@ -74,26 +81,20 @@ MIN_CRUISE_S = 1.5       # need at least this much cruise for the cruise-only fe
 STILL_S = 1.0            # pressure averaged over this long just before start / after stop
 
 # vibration / spectra
-VIB_HP_HZ = 1.0          # high-pass before cruise vibration RMS / PSD
-VIB_PEAK_BAND = (2.0, 95.0)    # dominant-frequency search band (below 2 Hz = residual bulk motion)
-VIB_ENERGY_BAND = (5.0, 50.0)
+REST_PRE_S = (4.0, 1.0)  # rest baseline = from 4 s to 1 s before motion start
 SWAY_BAND = (0.5, 20.0)  # lateral sway band-pass
 WOBBLE_BAND = (0.5, 10.0)      # post-stop wobble band-pass (car bounce on ropes / re-levelling)
 WOBBLE_S = 2.0           # window after motion end
+BOUNCE_S = 3.0           # bounce-frequency window after motion end
+BOUNCE_BAND = (1.0, 8.0)
+BOUNCE_NFFT = 4096       # zero-padded FFT -> ~0.05 Hz bins
 WELCH_NPERSEG = 256      # 1.28 s segments -> 0.78 Hz resolution
 FLICKER_BAND = (50.0, 99.0)    # 120 Hz flicker aliases to 80 Hz
 MAINS_ALIAS_HZ = (60.0, 80.0, 20.0, 40.0)   # 60, 120, 180, 240/360 Hz folded about 100 Hz
 TONE_HALF_BW = 0.8       # Hz either side of a tone when integrating its power
-EMF_ENV_S = 0.5          # EMF envelope smoothing for the EMF-accel correlation
-
-# door-open features: windows (s) around the logged door_open, clear of the ~1 s logging latency
-DOOR_PRE = (-4.0, -1.5)
-DOOR_POST = (1.5, 4.0)
 
 # slow sensors
-SLOW_PAD_S = 5.0         # widen the ride window for temp / RH (1 Hz samples)
-MIN_SLOW_N = 5
-MIN_SLOPE_M = 3.0        # need this much altitude change to fit a temp / RH vs altitude slope
+SLOW_PAD_S = 5.0         # widen the ride window for temperature (1 Hz samples)
 
 
 # ----------------------------- loading -----------------------------
@@ -216,22 +217,17 @@ def session_signals(F):
     h = [A @ e1, A @ e2]                                  # horizontal components (band-passed below)
     light = F["light"].values.astype(float)
     emf = F["emf"].values.astype(float)
-    emf_env = np.abs(emf - pd.Series(emf).rolling(int(4 * FAST_HZ), center=True, min_periods=1)
-                     .mean().values)
-    k = int(EMF_ENV_S * FAST_HZ)
     return {
         "t": (F["t_us"].values - F["t_us"].values[0]) / 1e6,
         "host": F["host"].values,
         "pres": F["pres"].values,
         "a_v": a_v,
         "a_lp": butter(a_v, MOTION_LP_HZ, "lowpass"),
-        "a_vib": butter(a_v, VIB_HP_HZ, "highpass"),
         "a_wob": butter(a_v, WOBBLE_BAND, "bandpass"),
         "h1": butter(h[0], SWAY_BAND, "bandpass"),
         "h2": butter(h[1], SWAY_BAND, "bandpass"),
         "light": light,
         "emf": emf,
-        "emf_env": np.convolve(emf_env, np.ones(k) / k, mode="same"),
     }
 
 
@@ -259,12 +255,6 @@ def pres_median(sig, lo, hi):
     P = sig["pres"][lo:hi]
     P = P[~np.isnan(P)]
     return float(np.median(P)) if len(P) else np.nan
-
-
-def host_window(sig, t_host, rel):
-    """Row slice for host-time window t_host + rel (s)."""
-    h = sig["host"]
-    return slice(int(np.searchsorted(h, t_host + rel[0])), int(np.searchsorted(h, t_host + rel[1])))
 
 
 def r(x, n):
@@ -298,7 +288,26 @@ def motion_phases(sig, i0, i1, up):
     return s, k_launch, k_brake, e
 
 
-def ride_features(sig, S, i0, i1, door_open_host):
+def ramp_slope(t, a, lo_frac, hi_frac, peak):
+    """|slope| (g/s) of a least-squares line through the part of a ramp between lo_frac and hi_frac of
+    peak: a jerk estimate from many samples instead of one derivative maximum."""
+    m = (np.abs(a) >= lo_frac * peak) & (np.abs(a) <= hi_frac * peak)
+    return abs(np.polyfit(t[m], np.abs(a[m]), 1)[0]) if m.sum() >= 5 else np.nan
+
+
+def plateau_s(a, k, peak):
+    """Length (s) of the contiguous stretch around index k where |a| stays >= 90% of peak."""
+    hi = np.abs(a) >= RISE_FRAC * peak
+    lo = k
+    while lo > 0 and hi[lo - 1]:
+        lo -= 1
+    up = k
+    while up < len(a) - 1 and hi[up + 1]:
+        up += 1
+    return (up - lo + 1) / FAST_HZ
+
+
+def ride_features(sig, S, i0, i1):
     t = sig["t"]
     still = int(STILL_S * FAST_HZ)
 
@@ -319,9 +328,12 @@ def ride_features(sig, S, i0, i1, door_open_host):
     tt = t[s:e + 1]
     dt = np.gradient(tt)
     jerk = np.gradient(a_lp, tt)
-    launch, brake = abs(sig["a_lp"][k_l]), abs(sig["a_lp"][k_b])
-    rise = np.where(np.abs(a_lp[:k_l - s + 1]) >= RISE_FRAC * launch)[0]
+    kl, kb = k_l - s, k_b - s                             # launch / brake peak, ride-relative
+    launch, brake = abs(a_lp[kl]), abs(a_lp[kb])
+    rise = np.where(np.abs(a_lp[:kl + 1]) >= RISE_FRAC * launch)[0]
     rise_s = tt[rise[0]] - tt[0] if len(rise) else np.nan
+    release = np.where(np.abs(a_lp[kb:]) >= RISE_FRAC * brake)[0]
+    release_s = tt[-1] - tt[kb + release[-1]] if len(release) else np.nan
 
     # velocity by integrating raw accel, drift removed so it is 0 at rest on both ends
     v = np.cumsum(sig["a_v"][s:e + 1] * dt) * G
@@ -330,47 +342,62 @@ def ride_features(sig, S, i0, i1, door_open_host):
 
     # cruise = longest constant-velocity stretch between the launch and brake peaks
     quiet = np.zeros(len(a_lp), bool)
-    quiet[k_l - s:k_b - s] = np.abs(a_lp[k_l - s:k_b - s]) < CRUISE_ACCEL_THR
+    quiet[kl:kb] = np.abs(a_lp[kl:kb]) < CRUISE_ACCEL_THR
     run = longest_run(quiet)
     cruise_s = (run[1] - run[0]) / FAST_HZ if run else 0.0
     has_cruise = cruise_s >= MIN_CRUISE_S
     accel_end = run[0] if has_cruise else int(np.argmax(np.abs(v)))
+
+    # Launch = the accel phase that starts the ride, brake = the one that ends it, whatever the
+    # direction (up/down peaks would mix the two and split each car into two clusters).
     f = {
         "direction": "up" if up else "down",
         "duration_s": r(dur, 2),
         "height_m": r(height, 2),
         "cruise_speed_mps": r(np.median(np.abs(v[run[0]:run[1]])) if has_cruise
                               else np.abs(v).max(), 3),
-        "speed_ripple": np.nan,
-        "accel_dist_frac": r(dist[:accel_end].sum() / dist.sum(), 3) if dist.sum() > 0 else np.nan,
-        "peak_up_accel_g": r(a_lp.max(), 4),
-        "peak_down_accel_g": r(-a_lp.min(), 4),
+        "launch_accel_g": r(launch, 4),
+        "brake_accel_g": r(brake, 4),
         "accel_decel_ratio": r(launch / brake, 3) if brake > 0 else np.nan,
         "accel_rise_s": r(rise_s, 2),
+        "brake_release_s": r(release_s, 2),
+        "launch_jerk_g_s": r(ramp_slope(tt[:kl + 1], a_lp[:kl + 1], 0.2, 0.8, launch), 3),
+        "brake_jerk_g_s": r(ramp_slope(tt[kb:], a_lp[kb:], 0.2, 0.8, brake), 3),
         "peak_jerk_g_s": r(np.abs(jerk).max(), 3),
+        "launch_plateau_s": r(plateau_s(a_lp, kl, launch), 2),
+        "brake_plateau_s": r(plateau_s(a_lp, kb, brake), 2),
+        "launch_phase_s": r(tt[accel_end] - tt[0], 2),
+        "accel_dist_frac": r(dist[:accel_end].sum() / dist.sum(), 3) if dist.sum() > 0 else np.nan,
         "cruise_s": r(cruise_s, 2),
-        "rms_vib_g": np.nan, "dom_vib_freq_hz": np.nan, "band_energy_5_50hz": np.nan,
-        "lateral_sway_g": np.nan,
+        "sway_rest_ratio": np.nan,
     }
 
-    if has_cruise:
+    # Cruise lateral sway divided by the sway in the dwell just before the ride: the board's
+    # placement sets how much motion couples in, and the ratio cancels it (stable across days).
+    # Vertical vibration (RMS, centroid, band power) stayed day/placement-dependent even
+    # normalized this way, so it is not a feature.
+    pre = slice(max(0, s - int(REST_PRE_S[0] * FAST_HZ)), max(0, s - int(REST_PRE_S[1] * FAST_HZ)))
+    if has_cruise and pre.stop - pre.start > FAST_HZ:
         c0, c1 = s + run[0], s + run[1]
-        vc = np.abs(v[run[0]:run[1]])
-        f["speed_ripple"] = r(vc.std() / vc.mean(), 4)
-        vib = sig["a_vib"][c0:c1]
-        fr, P = welch(vib)
-        m = (fr >= VIB_PEAK_BAND[0]) & (fr <= VIB_PEAK_BAND[1])
-        f["rms_vib_g"] = r(np.sqrt(np.mean(vib ** 2)), 5)
-        f["dom_vib_freq_hz"] = r(fr[m][np.argmax(P[m])], 2)
-        f["band_energy_5_50hz"] = r(band_power(fr, P, *VIB_ENERGY_BAND) * 1e6, 3)   # mg^2
-        f["lateral_sway_g"] = r(np.sqrt(np.mean(sig["h1"][c0:c1] ** 2 + sig["h2"][c0:c1] ** 2)), 5)
+        rest_sway = np.sqrt(np.mean(sig["h1"][pre] ** 2 + sig["h2"][pre] ** 2))
+        sway = np.sqrt(np.mean(sig["h1"][c0:c1] ** 2 + sig["h2"][c0:c1] ** 2))
+        f["sway_rest_ratio"] = r(sway / rest_sway, 3) if rest_sway > 0 else np.nan
 
-    # post-stop wobble: residual bounce once the brake phase has died out
+    # post-stop wobble: residual bounce once the brake phase has died out, and its frequency
+    # (rope bounce: set by rope stiffness and car mass)
     wob = sig["a_wob"][e:e + int(WOBBLE_S * FAST_HZ)]
     f["post_stop_wobble_g"] = r(np.abs(wob).max(), 4) if len(wob) else np.nan
     f["post_stop_wobble_rms_g"] = r(np.sqrt(np.mean(wob ** 2)), 5) if len(wob) else np.nan
+    w = sig["a_v"][e:e + int(BOUNCE_S * FAST_HZ)]
+    f["bounce_freq_hz"] = np.nan
+    if len(w) == int(BOUNCE_S * FAST_HZ):
+        w = signal.detrend(w) * np.hanning(len(w))
+        fq = np.fft.rfftfreq(BOUNCE_NFFT, 1 / FAST_HZ)
+        A = np.abs(np.fft.rfft(w, BOUNCE_NFFT))
+        m = (fq >= BOUNCE_BAND[0]) & (fq <= BOUNCE_BAND[1])
+        f["bounce_freq_hz"] = r(fq[m][np.argmax(A[m])], 2)
 
-    # light: level, variance, and the 120 Hz flicker (aliased to 80 Hz)
+    # light: level, variance, and the 120 Hz flicker depth (aliased to 80 Hz)
     light = sig["light"][s:e + 1]
     fr, P = welch(light)
     m = (fr >= FLICKER_BAND[0]) & (fr <= FLICKER_BAND[1])
@@ -378,45 +405,21 @@ def ride_features(sig, S, i0, i1, door_open_host):
     amp = np.sqrt(2 * band_power(fr, P, fk - TONE_HALF_BW, fk + TONE_HALF_BW))
     f["light_mean"] = r(light.mean(), 1)
     f["light_std"] = r(light.std(), 2)
-    f["light_flicker_hz"] = r(fk, 1)
     f["light_flicker_index"] = r(amp / light.mean(), 4) if light.mean() > 0 else np.nan
 
-    # EMF: level, AC RMS, mains-harmonic content, and coupling to drive torque
+    # EMF: level, AC RMS, mains-harmonic content
     emf = sig["emf"][s:e + 1]
     fr, P = welch(emf)
     tones = [band_power(fr, P, h - TONE_HALF_BW, h + TONE_HALF_BW) for h in MAINS_ALIAS_HZ]
     total = band_power(fr, P, 1.0, 99.0)
-    env = sig["emf_env"][s:e + 1]
     f["emf_mean"] = r(emf.mean(), 2)
     f["emf_rms_ac"] = r(np.sqrt(np.mean((emf - emf.mean()) ** 2)), 3)
     f["emf_mains_frac"] = r(sum(tones) / total, 3) if total > 0 else np.nan
-    f["emf_mains_peak_hz"] = MAINS_ALIAS_HZ[int(np.argmax(tones))] if total > 0 else np.nan
-    f["emf_accel_corr"] = (r(np.corrcoef(np.abs(a_lp), env)[0, 1], 3)
-                           if env.std() > 0 and a_lp.std() > 0 else np.nan)
 
-    # door-open pressure pop and light step, from the logged door_open of the matched label
-    f["door_pressure_pop_pa"], f["door_light_step"] = np.nan, np.nan
-    if door_open_host is not None:
-        pre, post = host_window(sig, door_open_host, DOOR_PRE), host_window(sig, door_open_host, DOOR_POST)
-        if post.stop - post.start > 0.5 * FAST_HZ and pre.stop - pre.start > 0.5 * FAST_HZ:
-            f["door_pressure_pop_pa"] = r(pres_median(sig, post.start, post.stop)
-                                          - pres_median(sig, pre.start, pre.stop), 2)
-            f["door_light_step"] = r(sig["light"][post].mean() - sig["light"][pre].mean(), 1)
-
-    # slow sensors: cabin climate and its gradient with altitude
+    # cabin temperature (RH dropped: it follows the weather, not the building)
     ts = (S["t_us"].values - sig["t0_us"]) / 1e6
-    m = ((ts >= t[s] - SLOW_PAD_S) & (ts <= t[e] + SLOW_PAD_S)
-         & np.isfinite(S["temp"].values) & np.isfinite(S["rh"].values))
-    temp, rh = S["temp"].values[m], S["rh"].values[m]
-    f["temp_mean_c"] = r(np.nanmean(temp), 2) if m.any() else np.nan
-    f["rh_mean_pct"] = r(np.nanmean(rh), 2) if m.any() else np.nan
-    f["temp_alt_slope_c_per_m"], f["rh_alt_slope_pct_per_m"] = np.nan, np.nan
-    okp = ~np.isnan(sig["pres"])
-    if m.sum() >= MIN_SLOW_N and okp.sum() > 5:
-        alt = -np.interp(ts[m], t[okp], sig["pres"][okp]) / PA_PER_M
-        if alt.max() - alt.min() >= MIN_SLOPE_M:
-            f["temp_alt_slope_c_per_m"] = r(np.polyfit(alt, temp, 1)[0], 4)
-            f["rh_alt_slope_pct_per_m"] = r(np.polyfit(alt, rh, 1)[0], 4)
+    m = (ts >= t[s] - SLOW_PAD_S) & (ts <= t[e] + SLOW_PAD_S) & np.isfinite(S["temp"].values)
+    f["temp_mean_c"] = r(np.mean(S["temp"].values[m]), 2) if m.any() else np.nan
     f["_span"] = (s, e)
     return f
 
@@ -453,62 +456,59 @@ def occupancy_before(ev, host_t):
 
 
 def label_ride(F, i0, i1, windows, ev, floors):
-    """Attach building-floor labels to a detected ride by overlap with a door travel window.
-    Also returns the matched arrival door_open host time (for the door-open features)."""
+    """Attach building-floor labels to a detected ride by overlap with a door travel window."""
     h0, h1 = float(F["host"].iloc[i0]), float(F["host"].iloc[i1])
     best, best_ov = None, 0.0
     for (c, o, f_from, f_to) in windows:
         ov = max(0.0, min(h1, o) - max(h0, c))
         if ov > best_ov:
-            best_ov, best = ov, (f_from, f_to, o)
+            best_ov, best = ov, (f_from, f_to)
     if best is None:
         return {"start_floor": "", "end_floor": "", "n_floors_label": "",
-                "direction_label": "", "people_on_board": "", "matched_label": False}, None
-    f_from, f_to, t_open = best
+                "direction_label": "", "people_on_board": "", "matched_label": False}
+    f_from, f_to = best
     n_floors, dir_lab = "", ""
     if f_from in floors and f_to in floors:
         n_floors = abs(floors.index(f_to) - floors.index(f_from))
         dir_lab = "up" if floors.index(f_to) > floors.index(f_from) else "down"
     return {"start_floor": f_from, "end_floor": f_to, "n_floors_label": n_floors,
             "direction_label": dir_lab, "people_on_board": occupancy_before(ev, h0),
-            "matched_label": True}, t_open
+            "matched_label": True}
 
 
 # ----------------------------- visualization -----------------------------
 # Every feature as a strip of per-ride dots, one column per building. Cars of the same building
 # share the column and the building's hue, told apart by shade + marker. Black bar = building mean.
 FEATURES = [
+    # kinematics (motion profile)
     ("cruise_speed_mps", "Cruise speed (m/s)"),
-    ("peak_jerk_g_s", "Peak jerk (g/s)"),
-    ("peak_up_accel_g", "Peak up accel (g)"),
-    ("peak_down_accel_g", "Peak down accel (g)"),
+    ("launch_accel_g", "Launch accel (g)"),
+    ("brake_accel_g", "Brake accel (g)"),
     ("accel_decel_ratio", "Launch / brake accel ratio"),
-    ("accel_rise_s", "Accel rise time (s)"),
+    ("accel_rise_s", "Launch rise time (s)"),
+    ("brake_release_s", "Brake release time (s)"),
+    ("launch_jerk_g_s", "Launch ramp jerk (g/s)"),
+    ("brake_jerk_g_s", "Brake ramp jerk (g/s)"),
+    ("peak_jerk_g_s", "Peak jerk (g/s)"),
+    ("launch_plateau_s", "Launch accel plateau (s)"),
+    ("brake_plateau_s", "Brake accel plateau (s)"),
+    ("launch_phase_s", "Launch phase, start to cruise (s)"),
     ("accel_dist_frac", "Accel-distance fraction"),
-    ("speed_ripple", "Cruise speed ripple (std/mean)"),
-    ("floor_height_m", "Floor height (m)"),
     ("duration_s", "Ride duration (s)"),
+    # stop
     ("post_stop_wobble_g", "Post-stop wobble peak (g)"),
     ("post_stop_wobble_rms_g", "Post-stop wobble RMS (g)"),
-    ("rms_vib_g", "Cruise vibration RMS (g)"),
-    ("dom_vib_freq_hz", "Dominant vib freq (Hz)"),
-    ("band_energy_5_50hz", "Vib power 5-50 Hz (mg²)"),
-    ("lateral_sway_g", "Lateral sway RMS (g)"),
-    ("door_pressure_pop_pa", "Door-open pressure pop (Pa)"),
+    ("bounce_freq_hz", "Post-stop bounce freq (Hz)"),
+    # lateral sway (placement-normalized)
+    ("sway_rest_ratio", "Lateral sway / rest"),
+    # light, EMF, climate
     ("light_mean", "Cabin light (ADC)"),
     ("light_std", "Light std (ADC)"),
     ("light_flicker_index", "Light flicker index"),
-    ("light_flicker_hz", "Flicker freq, aliased (Hz)"),
-    ("door_light_step", "Door-open light step (ADC)"),
     ("emf_mean", "EMF mean (ADC)"),
     ("emf_rms_ac", "EMF AC RMS (ADC)"),
     ("emf_mains_frac", "EMF mains-harmonic fraction"),
-    ("emf_mains_peak_hz", "EMF strongest harmonic, aliased (Hz)"),
-    ("emf_accel_corr", "EMF-accel correlation"),
     ("temp_mean_c", "Cabin temp (°C)"),
-    ("rh_mean_pct", "Cabin RH (%)"),
-    ("temp_alt_slope_c_per_m", "Temp vs altitude (°C/m)"),
-    ("rh_alt_slope_pct_per_m", "RH vs altitude (%/m)"),
 ]
 
 # fixed hue per building (never by rank); [dark, light, mid] shades for up to three cars
@@ -668,8 +668,8 @@ def main():
 
         spans, dropped = [], 0
         for i0, i1 in rides:
-            lab, t_open = label_ride(F, i0, i1, windows, ev, floors)
-            feat = ride_features(sig, S, i0, i1, t_open)
+            lab = label_ride(F, i0, i1, windows, ev, floors)
+            feat = ride_features(sig, S, i0, i1)
             if feat is None:
                 dropped += 1
                 continue
@@ -721,7 +721,10 @@ def main():
     label_cols = ["session", "building", "car", "ride", "direction", "start_floor", "end_floor",
                   "n_floors_label", "direction_label", "people_on_board"]
     feat_cols = [c for c, _ in FEATURES]
-    cols = label_cols + feat_cols + ["height_m", "cruise_s", "t_start_s", "t_end_s", "matched_label"]
+    # height_m feeds the floor-lattice feature (fit per CV fold in the classifier stage);
+    # floor_height_m needs logged floors, so it is for analysis only, not a classifier input
+    cols = label_cols + feat_cols + ["height_m", "floor_height_m", "cruise_s", "t_start_s", "t_end_s",
+                                     "matched_label"]
     df = pd.DataFrame(all_rows)[cols]
 
     def save(fn, path):
