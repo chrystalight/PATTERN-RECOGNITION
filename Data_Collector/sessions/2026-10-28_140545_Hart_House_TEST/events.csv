@@ -1,3 +1,0 @@
-host_epoch,iso_time,t_us_at_event,event_type,value,note
-1793210745.259926,2026-10-28T14:05:45.259,,session_start,Hart House,car=TEST
-1793210754.756515,2026-10-28T14:05:54.756,,session_end,,
