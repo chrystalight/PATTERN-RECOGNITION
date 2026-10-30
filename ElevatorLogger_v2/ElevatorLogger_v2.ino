@@ -7,6 +7,7 @@
 #include <Adafruit_AHTX0.h>                   // Hardware-specific library for AHT20 - Connect external AHT20 with provided wire to Port J7
 #include "SparkFun_BMA400_Arduino_Library.h"  // Hardware-specific library for BMA400
 #include "esp_timer.h"                        // ESP32 hardware timer (fixed sample rate)
+#include "classifier.h"                       // on-board elevator classifier (Part 4); needs knn_model.h
 
 /*
   ELEVATOR LOGGER v2 - dual-rate data collection
@@ -25,6 +26,12 @@
     S,t_us,temp_C,rh_pct,gas_kOhm                      slow row; gas is nan unless LOG_GAS = 1
     M,t_us,missed_ticks                                only appears if fast ticks were skipped (loop overran)
     # ...                                              comment / header lines
+    # RIDE t_us=... building=... ...                   one per ride when CLASSIFY_ON_BOARD = 1 (a comment line,
+                                                       so the capture app keeps it and postprocess.py ignores it)
+
+  ON-BOARD CLASSIFIER (CLASSIFY_ON_BOARD = 1): about 6 s after each ride stops, the board names the building
+  on its screen, from launch jerk + light flicker (see classifier.h). Computing it and redrawing the screen
+  take a few tens of ms, so a few fast ticks are skipped then (logged as an M row) while the car is parked.
   t_us is microseconds since boot (64-bit, does not wrap).
 */
 
@@ -32,6 +39,7 @@
 #define RUN_TIMING_TEST 0             // 1 = measure how long the work per fast tick takes, print results, then stop
                                       // 0 = run the logger
 #define SERIAL_BAUD 1000000           // MUST match the baud rate of whatever is capturing the data
+#define CLASSIFY_ON_BOARD 1           // 1 = also classify every ride on the board and show the building on screen
 
 //FAST stream
 #define FAST_PERIOD_US 5000UL         // PLACEHOLDER: fast tick period in us (5000 = 200 Hz). Use the timing test result.
@@ -89,6 +97,10 @@ Adafruit_BME680 bme;
 Adafruit_AHTX0 aht;
 Adafruit_ADS1015 ads;
 BMA400 accelerometer;
+
+#if CLASSIFY_ON_BOARD
+ride::RideClassifier rideClassifier;  //ride detection + features + KNN (about 115 KB of buffers)
+#endif
 
 //Latest values
 float ax = 0, ay = 0, az = 0;       //g
@@ -375,8 +387,47 @@ void fastTick(int64_t t) {
   readAccel();   //first, so it lines up best with the timestamp
   readAds();
   pollBme();
+#if CLASSIFY_ON_BOARD
+  //hand the classifier this sample (pressure only when a new reading arrived), before emitFastRow clears the flag
+  bool rideDone = rideClassifier.addSample(ax, ay, az, rawLight, pressureNew ? lastPres : NAN);
+#endif
   emitFastRow(t);
+#if CLASSIFY_ON_BOARD
+  if (rideDone) reportRide(t);
+#endif
 }
+
+#if CLASSIFY_ON_BOARD
+//------------------ ON-BOARD CLASSIFIER OUTPUT ------------------
+//Prints the result as a comment line and shows it on the screen until the next ride.
+void reportRide(int64_t t) {
+  const ride::Result& r = rideClassifier.result();
+  tft.fillScreen(ST77XX_BLACK);
+  if (!r.valid) {
+    Serial.printf("# RIDE t_us=%lld not classified: %s\n", (long long)t, r.why);
+    tft.setTextSize(3);
+    tft.setCursor(10, 30);
+    tft.print("?");
+    tft.setTextSize(2);
+    tft.setCursor(10, 75);
+    tft.print("not classified");
+    return;
+  }
+  const char* name = knn::CLASS_NAMES[r.building];
+  Serial.printf("# RIDE t_us=%lld building=%s launch_jerk_g_s=%.4f light_flicker_index=%.4f direction=%s check=%s\n",
+                (long long)t, name, r.launchJerk, r.flicker, r.up ? "up" : "down", r.agree ? "ok" : "uncertain");
+  tft.setTextSize(3);
+  tft.setCursor(10, 20);
+  tft.print(name);
+  tft.setTextSize(2);
+  tft.setCursor(10, 65);
+  tft.printf("jerk %.3f g/s", r.launchJerk);
+  tft.setCursor(10, 88);
+  tft.printf("flicker %.4f", r.flicker);
+  tft.setCursor(10, 111);
+  tft.print(r.agree ? "sensors agree" : "UNCERTAIN");   //cross-check: jerk and flicker point to the same pair
+}
+#endif
 
 //------------------ SLOW STREAM ------------------
 void ahtTrigger() {

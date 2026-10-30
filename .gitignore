@@ -1,2 +1,6 @@
 __pycache__/
 *.pyc
+
+# compiled board-check simulator
+Classifier/board_check/board_sim
+Classifier/board_check/board_sim.exe
