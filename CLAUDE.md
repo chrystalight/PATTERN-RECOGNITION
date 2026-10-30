@@ -14,6 +14,15 @@ sensor data.
   rides and writes the single source of truth `ride_features.csv` (one row per ride), plus
   `ride_features.png` (features by building) and `segmentation_check.png` (per-session pressure /
   speed / detected spans / door events). Run: `python postprocess.py`.
+- `Data_Collector/ride_waveforms.csv` — also written by `postprocess.py`: the same rides as
+  2 × 100-sample launch/brake traces of the 1.5 Hz vertical accel (25 Hz, launch-positive), the 1D
+  CNN's raw input. Rows line up with `ride_features.csv` (session + ride).
+- `Classifier/elevator_classifier.ipynb` — Part 3, runs in Colab (reads the CSVs from the public
+  GitHub raw URL) or locally. Baseline (peak-accel thresholds), KNN, Gaussian NB (equal priors),
+  tree + random forest (entropy), tiny Keras 1D CNN, forward wrapper selection; all scored with
+  leave-one-session-out. `HOLDOUT_SESSIONS` stays empty until the model is frozen.
+- `Classifier/COURSE_REFERENCE.md` — what Lecture 8 (`RELEVANT COURSE CONTENT.pdf`) teaches for
+  each method; use the lecture's version of each method and cite it.
 - `Data_Collector/plot_elevator_rides.py` — per-session sensor time series with event overlays.
 - `Data_Collector/Elevator_Data_Collection_Summary.md` — assignment brief + firmware/data spec.
 - `ElevatorLogger_v2/ElevatorLogger_v2.ino` — board firmware.
@@ -81,8 +90,11 @@ sensor data.
 - Myhal_left rides 3→1 and 4→1 measure as one floor (4.58 m), which is probably a labeling error.
 
 ## Next steps
-- Part 2/3: classifiers (KNN, naive Bayes, 1D CNN, tree/RF) vs a threshold baseline, with PCA /
-  feature selection; then run on the board.
+- Part 3 results (LOSO, 144 rides): baseline 93% (all errors are Rosebrugh, whose
+  direction-dependent launch accel overlaps MC), KNN 100%, NB 68% (single-session training
+  makes the per-class Gaussians too narrow for the other Myhal car / MC session), tree 99%,
+  RF 100%, CNN 100%; wrapper selection keeps only launch jerk, and KNN and NB then reach 100%.
+- Part 4: run on the board; report §6; held-out test.
 
 ## Working-notes doc (live project log)
 https://claude.ai/artifact/FSLMuYPCVkdbEFoYDCJco7 — goals, data status, features (with physical

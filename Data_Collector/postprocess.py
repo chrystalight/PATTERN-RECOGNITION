@@ -7,7 +7,8 @@ features, and writes a single consolidated table:
 
     Data_Collector/ride_features.csv      <- one row per ride, every session, the single source of truth
 
-plus two diagnostic figures: ride_features.png (every feature, per ride, grouped by building with
+plus ride_waveforms.csv (the same rides as fixed-length launch / brake acceleration traces, the
+raw input for the 1D CNN), and two diagnostic figures: ride_features.png (every feature, per ride, grouped by building with
 each car in its own shade) and segmentation_check.png (per-session pressure / speed / detected
 spans / door events).
 
@@ -58,6 +59,7 @@ OUT_CSV = os.path.join(BASE_DIR, "ride_features.csv")
 OUT_PNG = os.path.join(BASE_DIR, "ride_features.png")
 OUT_TOP_PNG = os.path.join(BASE_DIR, "ride_features_top15.png")
 OUT_SEG_PNG = os.path.join(BASE_DIR, "segmentation_check.png")
+OUT_WAVE_CSV = os.path.join(BASE_DIR, "ride_waveforms.csv")
 
 FAST_HZ = 200.0
 G = 9.81
@@ -95,6 +97,11 @@ TONE_HALF_BW = 0.8       # Hz either side of a tone when integrating its power
 
 # slow sensors
 SLOW_PAD_S = 5.0         # widen the ride window for temperature (1 Hz samples)
+
+# 1D-CNN input: a_lp around the launch and around the brake, launch-positive, decimated
+WAVE_PRE_S = 1.0         # launch window = 1 s before motion start .. 3 s after
+WAVE_POST_S = 3.0        # (brake window mirrored: 3 s before motion end .. 1 s after)
+WAVE_DECIM = 8           # 200 Hz -> 25 Hz (a_lp is already low-passed at 1.5 Hz)
 
 
 # ----------------------------- loading -----------------------------
@@ -413,6 +420,16 @@ def ride_features(sig, S, i0, i1):
     return f
 
 
+def ride_waveform(sig, s, e, up):
+    """Fixed-length launch and brake traces of a_lp (g), signed so the launch is positive in both
+    directions: the raw-signal input for the 1D CNN. Indices past the session ends repeat the edge."""
+    a = sig["a_lp"] * (1.0 if up else -1.0)
+    pre, post = int(WAVE_PRE_S * FAST_HZ), int(WAVE_POST_S * FAST_HZ)
+    launch = np.take(a, np.arange(s - pre, s + post, WAVE_DECIM), mode="clip")
+    brake = np.take(a, np.arange(e - post, e + pre, WAVE_DECIM), mode="clip")
+    return launch, brake
+
+
 # ----------------------------- labels from events -----------------------------
 def travel_windows(ev):
     """Pair each door_close (departure) with the next door_open (arrival) -> labeled ride windows."""
@@ -633,6 +650,7 @@ def plot_segmentation_check(panels, out_png):
 def main():
     building_floors = load_config_floors()
     all_rows = []
+    wave_rows = []
     seg_panels = []
     print(f"{'session':44} {'Hz':>5} {'pres%':>6} {'rides':>6} {'labeled':>8}  note")
     print("-" * 92)
@@ -696,6 +714,12 @@ def main():
                                      if isinstance(nf, int) and nf > 0 and np.isfinite(h) else np.nan)
             all_rows.append(row)
 
+            launch, brake = ride_waveform(sig, s, e, feat["direction"] == "up")
+            wave = {"session": name, "building": building, "ride": len(spans)}
+            wave.update({f"launch_{i:03d}": round(float(x), 5) for i, x in enumerate(launch)})
+            wave.update({f"brake_{i:03d}": round(float(x), 5) for i, x in enumerate(brake)})
+            wave_rows.append(wave)
+
         # collect what the segmentation-check figure needs (times on the t_us base, in seconds)
         grid, alt_s, speed = altitude_series(F)
         if grid is not None:
@@ -744,6 +768,7 @@ def main():
             return f"NOT WRITTEN ({os.path.basename(path)}: {exc.strerror or exc} — close it if open, re-run)"
 
     csv_msg = save(lambda: df.to_csv(OUT_CSV, index=False), OUT_CSV)
+    wave_msg = save(lambda: pd.DataFrame(wave_rows).to_csv(OUT_WAVE_CSV, index=False), OUT_WAVE_CSV)
     png_msg = save(lambda: plot_features(df, OUT_PNG, list(building_floors)), OUT_PNG)
     labels = dict(FEATURES)
     top = [(c, f"{i}. {labels[c]}") for i, c in enumerate(TOP_FEATURES, start=1)]
@@ -753,6 +778,7 @@ def main():
     print("-" * 92)
     print(f"{len(df)} rides from {df['session'].nunique()} sessions, {len(feat_cols)} features -> {csv_msg}")
     print("Buildings:", ", ".join(f"{b}:{n}" for b, n in df["building"].value_counts().items()))
+    print(f"CNN waveforms       -> {wave_msg}")
     print(f"Feature plot        -> {png_msg}")
     print(f"Top-15 plot         -> {top_msg}")
     print(f"Segmentation check  -> {seg_msg}")
