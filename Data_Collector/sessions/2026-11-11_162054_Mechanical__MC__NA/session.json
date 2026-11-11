@@ -1,0 +1,25 @@
+{
+  "building": "Mechanical (MC)",
+  "car": "",
+  "board_orientation": "",
+  "operator_notes": "",
+  "port": "COM4",
+  "baud": "1000000",
+  "floors": [
+    "B",
+    "G",
+    "1",
+    "2",
+    "3",
+    "4",
+    "5"
+  ],
+  "firmware_header": [
+    "RIDE t_us=152408208 building=MC launch_jerk_g_s=0.1045 light_flicker_index=0.0001 direction=down check=ok",
+    "RIDE t_us=174948208 building=MC launch_jerk_g_s=0.0932 light_flicker_index=0.0001 direction=up check=ok",
+    "RIDE t_us=199253207 building=MC launch_jerk_g_s=0.0957 light_flicker_index=0.0001 direction=up check=ok"
+  ],
+  "stopped": true,
+  "stop_time": "2026-11-11T16:22:33",
+  "start_time": "2026-11-11T16:20:54"
+}

@@ -1,0 +1,23 @@
+{
+  "building": "Hart House",
+  "car": "",
+  "board_orientation": "",
+  "operator_notes": "",
+  "port": "COM4",
+  "baud": "1000000",
+  "floors": [
+    "B",
+    "G",
+    "1",
+    "2",
+    "3"
+  ],
+  "firmware_header": [
+    "RIDE t_us=112573207 building=Rosebrugh launch_jerk_g_s=0.1722 light_flicker_index=0.0142 direction=up check=ok",
+    "RIDE t_us=168783207 building=Rosebrugh launch_jerk_g_s=0.1729 light_flicker_index=0.0138 direction=down check=ok",
+    "BME680 reading timed out"
+  ],
+  "stopped": true,
+  "stop_time": "2026-11-11T16:14:42",
+  "start_time": "2026-11-11T16:12:59"
+}
