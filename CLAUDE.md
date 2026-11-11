@@ -72,7 +72,7 @@ sensor data.
   barometer's noise, so it isn't a feature.
 - Keep it to ONE script, ONE consolidated output (`ride_features.csv`). `ride_features.png` puts
   one column per building, with cars in the same building shown as shades of that building's hue;
-  `ride_features_top15.png` shows only `TOP_FEATURES` (the 15 carried to the classifiers, ranked).
+  `ride_features_top10.png` shows only `TOP_FEATURES` (the 10 carried to the classifiers, ranked).
 - Classifier rules: leave-one-session-out CV; anything learned from data (floor-lattice clusters,
   scaling, PCA, feature selection) is refitted inside each fold. The rise/jerk/release/launch-phase
   features are one correlated "drive smoothness" factor (r 0.88–0.98), so trim them or reduce them
@@ -102,15 +102,19 @@ sensor data.
 - Myhal_left rides 3→1 and 4→1 measure as one floor (4.58 m), which is probably a labeling error.
 
 ## Next steps
-- Part 3 results (LOSO, 144 rides): baseline 93% (all errors are Rosebrugh, whose
+- Part 3 results (LOSO, 144 rides, top 10 features): baseline 93% (all errors are Rosebrugh, whose
   direction-dependent launch accel overlaps MC), KNN 100%, NB 68% (single-session training
-  makes the per-class Gaussians too narrow for the other Myhal car / MC session), tree 99%,
+  makes the per-class Gaussians too narrow for the other Myhal car / MC session), tree 100%,
   RF 100%, CNN 100%; wrapper selection keeps only launch jerk, and KNN and NB then reach 100%.
 - Final model: KNN (K=15) on launch jerk + light flicker. Jerk is the one feature wrapper selection
   keeps. Flicker is a backup from a different sensor (r = −0.03 with jerk): it splits {Hart House, MC}
   (no flicker) from {Myhal, Rosebrugh}, and jerk separates within each pair.
-- Report §6 is written. Still to do: flash and ride-test the firmware, held-out test, report §7, and
-  a limitations section at the end (the user doesn't want shortcomings spread through the report).
+- Held-out test (run once, 2026-11-11 sessions in `HOLDOUT_SESSIONS`): Rosebrugh, MC, Myhal, 10/10
+  correct; no new Hart House session. `2026-11-11_161259_Hart_House_NA_actually RB` is Rosebrugh
+  (Hart House was selected by mistake; `session.json` corrected). The board ran the classifier in
+  those sessions: 9/9 correct, cross-check ok, each classification pauses sampling <= 0.25 s.
+  Burton (unknown elevator) replayed through the board code: all 4 rides -> Rosebrugh, check ok.
+- Report: the "Concise report draft" tab of the working-notes doc is the current report.
 
 ## Working-notes doc (live project log)
 https://claude.ai/artifact/FSLMuYPCVkdbEFoYDCJco7 — goals, data status, features (with physical

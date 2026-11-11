@@ -57,7 +57,7 @@ SESSIONS_DIR = os.path.join(BASE_DIR, "sessions")
 CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
 OUT_CSV = os.path.join(BASE_DIR, "ride_features.csv")
 OUT_PNG = os.path.join(BASE_DIR, "ride_features.png")
-OUT_TOP_PNG = os.path.join(BASE_DIR, "ride_features_top15.png")
+OUT_TOP_PNG = os.path.join(BASE_DIR, "ride_features_top10.png")
 OUT_SEG_PNG = os.path.join(BASE_DIR, "segmentation_check.png")
 OUT_WAVE_CSV = os.path.join(BASE_DIR, "ride_waveforms.csv")
 
@@ -515,16 +515,16 @@ FEATURES = [
     ("temp_mean_c", "Cabin temp (°C)"),
 ]
 
-# The 15 features carried forward to the classifiers, best first: ranked on between- vs
+# The 10 features carried forward to the classifiers, best first: ranked on between- vs
 # within-building spread, worst-pair separation, Rosebrugh cross-day shift, and redundancy (left out:
 # light_std ~ flicker index, wobble RMS ~ wobble peak, temp (day risk), bounce freq / brake plateau
-# (weak), duration / accel-distance fraction (trip length, not car)). Ranked on all shared data, so
+# (weak), duration / accel-distance fraction (trip length, not car), and the five lowest-ranked:
+# post-stop wobble, brake release, brake accel, peak jerk, sway/rest). Ranked on all shared data, so
 # it is a starting point; the reported results re-select features inside each CV fold.
 TOP_FEATURES = [
     "accel_rise_s", "launch_jerk_g_s", "launch_accel_g", "brake_jerk_g_s", "light_mean",
     "cruise_speed_mps", "launch_plateau_s", "accel_decel_ratio", "light_flicker_index",
-    "launch_phase_s", "post_stop_wobble_g", "brake_release_s", "brake_accel_g", "peak_jerk_g_s",
-    "sway_rest_ratio",
+    "launch_phase_s",
 ]
 
 # fixed hue per building (never by rank); [dark, light, mid] shades for up to three cars
@@ -773,14 +773,14 @@ def main():
     labels = dict(FEATURES)
     top = [(c, f"{i}. {labels[c]}") for i, c in enumerate(TOP_FEATURES, start=1)]
     top_msg = save(lambda: plot_features(df, OUT_TOP_PNG, list(building_floors), top,
-                                         "Top 15 features, ranked", ncol=5), OUT_TOP_PNG)
+                                         "Top 10 features, ranked", ncol=5), OUT_TOP_PNG)
     seg_msg = save(lambda: plot_segmentation_check(seg_panels, OUT_SEG_PNG), OUT_SEG_PNG)
     print("-" * 92)
     print(f"{len(df)} rides from {df['session'].nunique()} sessions, {len(feat_cols)} features -> {csv_msg}")
     print("Buildings:", ", ".join(f"{b}:{n}" for b, n in df["building"].value_counts().items()))
     print(f"CNN waveforms       -> {wave_msg}")
     print(f"Feature plot        -> {png_msg}")
-    print(f"Top-15 plot         -> {top_msg}")
+    print(f"Top-10 plot         -> {top_msg}")
     print(f"Segmentation check  -> {seg_msg}")
 
 
