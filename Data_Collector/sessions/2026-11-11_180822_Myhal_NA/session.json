@@ -1,0 +1,27 @@
+{
+  "building": "Myhal",
+  "car": "",
+  "board_orientation": "",
+  "operator_notes": "",
+  "port": "COM4",
+  "baud": "1000000",
+  "floors": [
+    "B",
+    "1",
+    "2",
+    "3",
+    "4",
+    "5",
+    "6",
+    "7"
+  ],
+  "firmware_header": [
+    "RIDE t_us=106158208 building=Myhal launch_jerk_g_s=0.0635 light_flicker_index=0.0172 direction=up check=ok",
+    "RIDE t_us=134798208 building=Myhal launch_jerk_g_s=0.0628 light_flicker_index=0.0176 direction=down check=ok",
+    "RIDE t_us=162663207 building=Myhal launch_jerk_g_s=0.0616 light_flicker_index=0.0172 direction=down check=ok",
+    "RIDE t_us=200803208 building=Myhal launch_jerk_g_s=0.0619 light_flicker_index=0.0170 direction=up check=ok"
+  ],
+  "stopped": true,
+  "stop_time": "2026-11-11T18:10:36",
+  "start_time": "2026-11-11T18:08:22"
+}
